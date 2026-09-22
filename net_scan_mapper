@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""
+Port Scanner GUI
+-----------------
+A simple, multi-threaded TCP port scanner with a Tkinter GUI, styled using
+ttkthemes.ThemedTk.
+
+Requirements:
+    pip install ttkthemes
+
+Usage:
+    python port_scanner.py
+
+Notes:
+    - Only scan hosts/networks you own or have explicit permission to test.
+      Unauthorized port scanning may be illegal in your jurisdiction.
+"""
+
+import socket
+import threading
+import queue
+import time
+from datetime import datetime
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+try:
+    from ttkthemes import ThemedTk
+except ImportError:
+    raise SystemExit(
+        "Missing dependency 'ttkthemes'. Install it with:\n\n    pip install ttkthemes\n"
+    )
+
+# Common ports mapped to service names, used for a quick description in results
+COMMON_PORTS = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
+    80: "HTTP", 110: "POP3", 111: "RPCbind", 135: "MSRPC",
+    139: "NetBIOS", 143: "IMAP", 443: "HTTPS", 445: "SMB",
+    993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1723: "PPTP",
+    3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 5900: "VNC",
+    6379: "Redis", 8080: "HTTP-Proxy", 8443: "HTTPS-Alt", 27017: "MongoDB",
+}
+
+
+class PortScannerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Port Scanner")
+        self.root.geometry("720x560")
+        self.root.minsize(640, 480)
+
+        # Scan control state
+        self.scan_thread = None
+        self.stop_flag = threading.Event()
+        self.result_queue = queue.Queue()
+        self.total_ports = 0
+        self.scanned_ports = 0
+        self.open_count = 0
+
+        self._build_menu()
+        self._build_layout()
+        self._poll_queue()
+
+    # ------------------------------------------------------------------ UI
+
+    def _build_menu(self):
+        menubar = tk.Menu(self.root)
+
+        theme_menu = tk.Menu(menubar, tearoff=0)
+        available_themes = sorted(self.root.get_themes())
+        for theme in available_themes:
+            theme_menu.add_command(
+                label=theme, command=lambda t=theme: self.root.set_theme(t)
+            )
+        menubar.add_cascade(label="Theme", menu=theme_menu)
+
+        self.root.config(menu=menubar)
+
+    def _build_layout(self):
+        outer = ttk.Frame(self.root, padding=12)
+        outer.pack(fill="both", expand=True)
+
+        # ---- Input frame -------------------------------------------------
+        input_frame = ttk.LabelFrame(outer, text="Scan Settings", padding=10)
+        input_frame.pack(fill="x", pady=(0, 10))
+
+        for col in range(6):
+            input_frame.columnconfigure(col, weight=1)
+
+        ttk.Label(input_frame, text="Target Host / IP:").grid(
+            row=0, column=0, sticky="w", padx=4, pady=4
+        )
+        self.host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(input_frame, textvariable=self.host_var).grid(
+            row=0, column=1, columnspan=3, sticky="ew", padx=4, pady=4
+        )
+
+        ttk.Label(input_frame, text="Start Port:").grid(
+            row=1, column=0, sticky="w", padx=4, pady=4
+        )
+        self.start_port_var = tk.StringVar(value="1")
+        ttk.Entry(input_frame, textvariable=self.start_port_var, width=8).grid(
+            row=1, column=1, sticky="w", padx=4, pady=4
+        )
+
+        ttk.Label(input_frame, text="End Port:").grid(
+            row=1, column=2, sticky="w", padx=4, pady=4
+        )
+        self.end_port_var = tk.StringVar(value="1024")
+        ttk.Entry(input_frame, textvariable=self.end_port_var, width=8).grid(
+            row=1, column=3, sticky="w", padx=4, pady=4
+        )
+
+        ttk.Label(input_frame, text="Threads:").grid(
+            row=1, column=4, sticky="w", padx=4, pady=4
+        )
+        self.thread_var = tk.StringVar(value="100")
+        ttk.Entry(input_frame, textvariable=self.thread_var, width=8).grid(
+            row=1, column=5, sticky="w", padx=4, pady=4
+        )
+
+        ttk.Label(input_frame, text="Timeout (s):").grid(
+            row=2, column=0, sticky="w", padx=4, pady=4
+        )
+        self.timeout_var = tk.StringVar(value="0.5")
+        ttk.Entry(input_frame, textvariable=self.timeout_var, width=8).grid(
+            row=2, column=1, sticky="w", padx=4, pady=4
+        )
+
+        self.only_open_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            input_frame, text="Show only open ports", variable=self.only_open_var
+        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+
+        # ---- Buttons -------------------------------------------------
+        btn_frame = ttk.Frame(outer)
+        btn_frame.pack(fill="x", pady=(0, 10))
+
+        self.start_btn = ttk.Button(btn_frame, text="Start Scan", command=self.start_scan)
+        self.start_btn.pack(side="left", padx=(0, 6))
+
+        self.stop_btn = ttk.Button(
+            btn_frame, text="Stop", command=self.stop_scan, state="disabled"
+        )
+        self.stop_btn.pack(side="left", padx=(0, 6))
+
+        self.clear_btn = ttk.Button(btn_frame, text="Clear Results", command=self.clear_results)
+        self.clear_btn.pack(side="left")
+
+        self.status_var = tk.StringVar(value="Idle")
+        ttk.Label(btn_frame, textvariable=self.status_var, anchor="e").pack(
+            side="right", fill="x", expand=True
+        )
+
+        # ---- Progress bar -------------------------------------------------
+        self.progress = ttk.Progressbar(outer, mode="determinate")
+        self.progress.pack(fill="x", pady=(0, 10))
+
+        # ---- Results table -------------------------------------------------
+        table_frame = ttk.Frame(outer)
+        table_frame.pack(fill="both", expand=True)
+
+        columns = ("port", "status", "service")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings")
+        self.tree.heading("port", text="Port")
+        self.tree.heading("status", text="Status")
+        self.tree.heading("service", text="Likely Service")
+        self.tree.column("port", width=100, anchor="center")
+        self.tree.column("status", width=120, anchor="center")
+        self.tree.column("service", width=200, anchor="w")
+
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        self.tree.tag_configure("open", foreground="#1a8a1a")
+        self.tree.tag_configure("closed", foreground="#999999")
+
+        # ---- Log / summary -------------------------------------------------
+        self.summary_var = tk.StringVar(value="")
+        ttk.Label(outer, textvariable=self.summary_var, anchor="w").pack(
+            fill="x", pady=(8, 0)
+        )
+
+    # ------------------------------------------------------------- Actions
+
+    def _validate_inputs(self):
+        host = self.host_var.get().strip()
+        if not host:
+            messagebox.showerror("Invalid input", "Please enter a target host or IP.")
+            return None
+
+        try:
+            start_port = int(self.start_port_var.get())
+            end_port = int(self.end_port_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid input", "Ports must be integers.")
+            return None
+
+        if not (0 < start_port <= 65535 and 0 < end_port <= 65535):
+            messagebox.showerror("Invalid input", "Ports must be between 1 and 65535.")
+            return None
+
+        if start_port > end_port:
+            messagebox.showerror("Invalid input", "Start port must be <= end port.")
+            return None
+
+        try:
+            num_threads = int(self.thread_var.get())
+            if num_threads < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid input", "Threads must be a positive integer.")
+            return None
+
+        try:
+            timeout = float(self.timeout_var.get())
+            if timeout <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid input", "Timeout must be a positive number.")
+            return None
+
+        try:
+            resolved_ip = socket.gethostbyname(host)
+        except socket.gaierror:
+            messagebox.showerror("Invalid input", f"Could not resolve host: {host}")
+            return None
+
+        return {
+            "host": host,
+            "resolved_ip": resolved_ip,
+            "start_port": start_port,
+            "end_port": end_port,
+            "num_threads": num_threads,
+            "timeout": timeout,
+        }
+
+    def start_scan(self):
+        if self.scan_thread and self.scan_thread.is_alive():
+            return
+
+        params = self._validate_inputs()
+        if params is None:
+            return
+
+        self.clear_results()
+        self.total_ports = params["end_port"] - params["start_port"] + 1
+        self.scanned_ports = 0
+        self.open_count = 0
+        self.progress.configure(maximum=self.total_ports, value=0)
+
+        self.stop_flag.clear()
+        self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.status_var.set(
+            f"Scanning {params['host']} ({params['resolved_ip']}) — "
+            f"ports {params['start_port']}-{params['end_port']}..."
+        )
+
+        self.scan_start_time = time.time()
+        self.scan_thread = threading.Thread(
+            target=self._run_scan, args=(params,), daemon=True
+        )
+        self.scan_thread.start()
+
+    def stop_scan(self):
+        self.stop_flag.set()
+        self.status_var.set("Stopping...")
+        self.stop_btn.configure(state="disabled")
+
+    def clear_results(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        self.progress.configure(value=0)
+        self.summary_var.set("")
+
+    # ------------------------------------------------------------ Scanning
+
+    def _run_scan(self, params):
+        host = params["resolved_ip"]
+        ports = list(range(params["start_port"], params["end_port"] + 1))
+        port_queue = queue.Queue()
+        for p in ports:
+            port_queue.put(p)
+
+        lock = threading.Lock()
+
+        def worker():
+            while not self.stop_flag.is_set():
+                try:
+                    port = port_queue.get_nowait()
+                except queue.Empty:
+                    return
+                is_open = self._check_port(host, port, params["timeout"])
+                service = COMMON_PORTS.get(port, "")
+                self.result_queue.put(("result", port, is_open, service))
+                port_queue.task_done()
+
+        num_threads = min(params["num_threads"], len(ports)) or 1
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        elapsed = time.time() - self.scan_start_time
+        self.result_queue.put(("done", elapsed, self.stop_flag.is_set()))
+
+    @staticmethod
+    def _check_port(host, port, timeout):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            result = sock.connect_ex((host, port))
+            return result == 0
+        except socket.error:
+            return False
+        finally:
+            sock.close()
+
+    # --------------------------------------------------------------- Queue
+
+    def _poll_queue(self):
+        try:
+            while True:
+                item = self.result_queue.get_nowait()
+                if item[0] == "result":
+                    _, port, is_open, service = item
+                    self.scanned_ports += 1
+                    self.progress.configure(value=self.scanned_ports)
+
+                    if is_open:
+                        self.open_count += 1
+                        self.tree.insert(
+                            "", "end",
+                            values=(port, "OPEN", service or "Unknown"),
+                            tags=("open",),
+                        )
+                    elif not self.only_open_var.get():
+                        self.tree.insert(
+                            "", "end",
+                            values=(port, "closed", service or ""),
+                            tags=("closed",),
+                        )
+
+                elif item[0] == "done":
+                    _, elapsed, was_stopped = item
+                    self.start_btn.configure(state="normal")
+                    self.stop_btn.configure(state="disabled")
+                    state_text = "Stopped" if was_stopped else "Completed"
+                    self.status_var.set(f"{state_text} in {elapsed:.2f}s")
+                    self.summary_var.set(
+                        f"Scanned {self.scanned_ports}/{self.total_ports} ports — "
+                        f"{self.open_count} open — finished {datetime.now().strftime('%H:%M:%S')}"
+                    )
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(50, self._poll_queue)
+
+
+def main():
+    root = ThemedTk(theme="arc")  # try "equilux" for a dark theme
+    app = PortScannerApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
