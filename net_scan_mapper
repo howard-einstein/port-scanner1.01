@@ -68,21 +68,52 @@ class PortScannerApp:
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
+
+        self.root.configure(bg="#1b2430")
+
+        style.configure("TFrame", background="#1b2430")
+        style.configure("TLabel", background="#1b2430", foreground="#f3f4f6")
+        style.configure("TCheckbutton", background="#1b2430", foreground="#f3f4f6")
+        style.configure("TButton",
+                        background="#1e3a5f",
+                        foreground="#f8fbff",
+                        borderwidth=1,
+                        focusthickness=1,
+                        focuscolor="#60a5fa")
+        style.map("TButton",
+                  background=[("active", "#2563eb"), ("pressed", "#1d4ed8")],
+                  foreground=[("active", "#ffffff"), ("pressed", "#ffffff")])
+        style.configure("TEntry",
+                        fieldbackground="#ffffff",
+                        foreground="#111827",
+                        background="#ffffff",
+                        borderwidth=1,
+                        relief="solid")
+        style.configure("TLabelframe", background="#1b2430")
+        style.configure("TLabelframe.Label", background="#1b2430", foreground="#f3f4f6")
+        style.configure("TLabelframe.border", background="#32465d", relief="solid")
+        style.configure("Horizontal.TProgressbar",
+                        background="#60a5fa",
+                        troughcolor="#2b3744",
+                        bordercolor="#3b4a5a",
+                        lightcolor="#60a5fa",
+                        darkcolor="#1d4ed8")
+
         style.configure("Treeview",
                         rowheight=28,
                         font=("TkDefaultFont", 10),
-                        fieldbackground="#f8f9fb",
+                        fieldbackground="#ffffff",
                         background="#ffffff",
-                        foreground="#1f2933")
+                        foreground="#111827")
         style.configure("Treeview.Heading",
                         font=("TkDefaultFont", 10, "bold"),
-                        background="#dde7f4",
-                        foreground="#1f2933")
+                        background="#dfe6f1",
+                        foreground="#111827")
         style.map("Treeview",
-                  background=[("selected", "#cfe2ff")],
-                  foreground=[("selected", "#0f172a")])
+                  background=[("selected", "#dbeafe")],
+                  foreground=[("selected", "#111827")])
         style.map("Treeview.Heading",
-                  background=[("active", "#cadcf7")],
+                  background=[("active", "#d0dbef")],
                   foreground=[("active", "#111827")])
 
     def _build_menu(self):
@@ -391,7 +422,7 @@ class PortScannerApp:
 
 
 def main():
-    root = ThemedTk(theme="arc")  # try "equilux" for a dark theme
+    root = ThemedTk(theme="equilux")
     app = PortScannerApp(root)
     root.mainloop()
 
