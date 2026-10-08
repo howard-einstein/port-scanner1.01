@@ -148,7 +148,8 @@ class PortScannerApp:
             row=0, column=1, columnspan=3, sticky="ew", padx=4, pady=4
         )
 
-        ttk.Label(input_frame, text="Start Port:").grid(
+        self.start_port_label = ttk.Label(input_frame, text="Start Port:")
+        self.start_port_label.grid(
             row=1, column=0, sticky="w", padx=4, pady=4
         )
         self.start_port_var = tk.StringVar(value="1")
@@ -156,11 +157,15 @@ class PortScannerApp:
             row=1, column=1, sticky="w", padx=4, pady=4
         )
 
-        ttk.Label(input_frame, text="End Port:").grid(
+        self.end_port_label = ttk.Label(input_frame, text="End Port:")
+        self.end_port_label.grid(
             row=1, column=2, sticky="w", padx=4, pady=4
         )
         self.end_port_var = tk.StringVar(value="1024")
-        ttk.Entry(input_frame, textvariable=self.end_port_var, width=8).grid(
+        self.end_port_entry = ttk.Entry(
+            input_frame, textvariable=self.end_port_var, width=8
+        )
+        self.end_port_entry.grid(
             row=1, column=3, sticky="w", padx=4, pady=4
         )
 
@@ -184,6 +189,19 @@ class PortScannerApp:
         ttk.Checkbutton(
             input_frame, text="Show only open ports", variable=self.only_open_var
         ).grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+
+        ttk.Label(input_frame, text="Scan mode:").grid(
+            row=3, column=0, sticky="w", padx=4, pady=4
+        )
+        self.port_mode_var = tk.StringVar(value="range")
+        ttk.Radiobutton(
+            input_frame, text="Port range", variable=self.port_mode_var,
+            value="range", command=self._update_port_mode
+        ).grid(row=3, column=1, sticky="w", padx=4, pady=4)
+        ttk.Radiobutton(
+            input_frame, text="Single port", variable=self.port_mode_var,
+            value="single", command=self._update_port_mode
+        ).grid(row=3, column=2, sticky="w", padx=4, pady=4)
 
         # ---- Buttons -------------------------------------------------
         btn_frame = ttk.Frame(outer)
@@ -245,6 +263,12 @@ class PortScannerApp:
 
     # ------------------------------------------------------------- Actions
 
+    def _update_port_mode(self):
+        single_port = self.port_mode_var.get() == "single"
+        self.start_port_label.configure(text="Port:" if single_port else "Start Port:")
+        self.end_port_label.configure(state="disabled" if single_port else "normal")
+        self.end_port_entry.configure(state="disabled" if single_port else "normal")
+
     def _validate_inputs(self):
         host = self.host_var.get().strip()
         if not host:
@@ -253,7 +277,8 @@ class PortScannerApp:
 
         try:
             start_port = int(self.start_port_var.get())
-            end_port = int(self.end_port_var.get())
+            single_port = self.port_mode_var.get() == "single"
+            end_port = start_port if single_port else int(self.end_port_var.get())
         except ValueError:
             messagebox.showerror("Invalid input", "Ports must be integers.")
             return None
@@ -293,6 +318,7 @@ class PortScannerApp:
             "resolved_ip": resolved_ip,
             "start_port": start_port,
             "end_port": end_port,
+            "single_port": single_port,
             "num_threads": num_threads,
             "timeout": timeout,
         }
@@ -314,9 +340,14 @@ class PortScannerApp:
         self.stop_flag.clear()
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        port_description = (
+            f"port {params['start_port']}"
+            if params["single_port"]
+            else f"ports {params['start_port']}-{params['end_port']}"
+        )
         self.status_var.set(
             f"Scanning {params['host']} ({params['resolved_ip']}) — "
-            f"ports {params['start_port']}-{params['end_port']}..."
+            f"{port_description}..."
         )
 
         self.scan_start_time = time.time()
