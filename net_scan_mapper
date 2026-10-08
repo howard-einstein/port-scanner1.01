@@ -17,9 +17,12 @@ Notes:
 """
 
 import socket
+import shutil
+import subprocess
 import threading
 import queue
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import tkinter as tk
@@ -59,6 +62,11 @@ class PortScannerApp:
         self.total_ports = 0
         self.scanned_ports = 0
         self.open_count = 0
+        self.nmap_path = shutil.which("nmap")
+        self.nmap_process = None
+        self.current_scan_type = "tcp_connect"
+        self.scan_note = ""
+        self.scan_error = ""
 
         self._build_menu()
         self._build_layout()
@@ -153,7 +161,10 @@ class PortScannerApp:
             row=1, column=0, sticky="w", padx=4, pady=4
         )
         self.start_port_var = tk.StringVar(value="1")
-        ttk.Entry(input_frame, textvariable=self.start_port_var, width=8).grid(
+        self.start_port_entry = ttk.Entry(
+            input_frame, textvariable=self.start_port_var, width=8
+        )
+        self.start_port_entry.grid(
             row=1, column=1, sticky="w", padx=4, pady=4
         )
 
@@ -169,39 +180,78 @@ class PortScannerApp:
             row=1, column=3, sticky="w", padx=4, pady=4
         )
 
-        ttk.Label(input_frame, text="Threads:").grid(
+        self.thread_label = ttk.Label(input_frame, text="Threads:")
+        self.thread_label.grid(
             row=1, column=4, sticky="w", padx=4, pady=4
         )
         self.thread_var = tk.StringVar(value="100")
-        ttk.Entry(input_frame, textvariable=self.thread_var, width=8).grid(
+        self.thread_entry = ttk.Entry(input_frame, textvariable=self.thread_var, width=8)
+        self.thread_entry.grid(
             row=1, column=5, sticky="w", padx=4, pady=4
         )
 
-        ttk.Label(input_frame, text="Timeout (s):").grid(
+        self.timeout_label = ttk.Label(input_frame, text="Timeout (s):")
+        self.timeout_label.grid(
             row=2, column=0, sticky="w", padx=4, pady=4
         )
         self.timeout_var = tk.StringVar(value="0.5")
-        ttk.Entry(input_frame, textvariable=self.timeout_var, width=8).grid(
+        self.timeout_entry = ttk.Entry(input_frame, textvariable=self.timeout_var, width=8)
+        self.timeout_entry.grid(
             row=2, column=1, sticky="w", padx=4, pady=4
         )
 
         self.only_open_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self.only_open_check = ttk.Checkbutton(
             input_frame, text="Show only open ports", variable=self.only_open_var
-        ).grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
+        )
+        self.only_open_check.grid(row=2, column=2, columnspan=2, sticky="w", padx=4, pady=4)
 
         ttk.Label(input_frame, text="Scan mode:").grid(
             row=3, column=0, sticky="w", padx=4, pady=4
         )
         self.port_mode_var = tk.StringVar(value="range")
-        ttk.Radiobutton(
+        self.port_mode_buttons = [ttk.Radiobutton(
             input_frame, text="Port range", variable=self.port_mode_var,
             value="range", command=self._update_port_mode
-        ).grid(row=3, column=1, sticky="w", padx=4, pady=4)
-        ttk.Radiobutton(
+        ), ttk.Radiobutton(
             input_frame, text="Single port", variable=self.port_mode_var,
             value="single", command=self._update_port_mode
-        ).grid(row=3, column=2, sticky="w", padx=4, pady=4)
+        )]
+        for column, button in zip((1, 2), self.port_mode_buttons):
+            button.grid(row=3, column=column, sticky="w", padx=4, pady=4)
+
+        ttk.Label(input_frame, text="Scan type:").grid(
+            row=4, column=0, sticky="w", padx=4, pady=4
+        )
+        self.scan_type_var = tk.StringVar(value="tcp_connect")
+        scan_types = (
+            ("TCP connect", "tcp_connect"),
+            ("TCP SYN (stealth)", "tcp_syn"),
+            ("ACK", "ack"),
+            ("Idle (unavailable)", "idle"),
+            ("UDP", "udp"),
+            ("IP protocol", "ip_protocol"),
+            ("Ping", "ping"),
+            ("Version detection", "version"),
+            ("OS detection", "os_detection"),
+        )
+        for index, (label, value) in enumerate(scan_types):
+            button = ttk.Radiobutton(
+                input_frame,
+                text=label,
+                variable=self.scan_type_var,
+                value=value,
+                command=self._update_scan_controls,
+                state="disabled" if value == "idle" else "normal",
+            )
+            button.grid(
+                row=4 + index // 3,
+                column=index % 3 * 2,
+                columnspan=2,
+                sticky="w",
+                padx=4,
+                pady=4,
+            )
 
         # ---- Buttons -------------------------------------------------
         btn_frame = ttk.Frame(outer)
@@ -264,10 +314,36 @@ class PortScannerApp:
     # ------------------------------------------------------------- Actions
 
     def _update_port_mode(self):
+        self._update_scan_controls()
+
+    def _update_scan_controls(self):
+        scan_type = self.scan_type_var.get()
+        uses_ports = scan_type not in ("ping", "ip_protocol")
         single_port = self.port_mode_var.get() == "single"
-        self.start_port_label.configure(text="Port:" if single_port else "Start Port:")
-        self.end_port_label.configure(state="disabled" if single_port else "normal")
-        self.end_port_entry.configure(state="disabled" if single_port else "normal")
+        self.start_port_label.configure(
+            text="Port:" if single_port else "Start Port:",
+            state="normal" if uses_ports else "disabled",
+        )
+        self.start_port_entry.configure(state="normal" if uses_ports else "disabled")
+        self.end_port_label.configure(
+            state="normal" if uses_ports and not single_port else "disabled"
+        )
+        self.end_port_entry.configure(
+            state="normal" if uses_ports and not single_port else "disabled"
+        )
+        for button in self.port_mode_buttons:
+            button.configure(state="normal" if uses_ports else "disabled")
+        uses_threads = scan_type == "tcp_connect"
+        self.thread_label.configure(state="normal" if uses_threads else "disabled")
+        self.thread_entry.configure(state="normal" if uses_threads else "disabled")
+        self.timeout_label.configure(state="normal" if uses_threads else "disabled")
+        self.timeout_entry.configure(state="normal" if uses_threads else "disabled")
+        filters_open_ports = scan_type in (
+            "tcp_connect", "tcp_syn", "udp", "version", "os_detection"
+        )
+        self.only_open_check.configure(
+            state="normal" if filters_open_ports else "disabled"
+        )
 
     def _validate_inputs(self):
         host = self.host_var.get().strip()
@@ -275,37 +351,48 @@ class PortScannerApp:
             messagebox.showerror("Invalid input", "Please enter a target host or IP.")
             return None
 
-        try:
-            start_port = int(self.start_port_var.get())
-            single_port = self.port_mode_var.get() == "single"
-            end_port = start_port if single_port else int(self.end_port_var.get())
-        except ValueError:
-            messagebox.showerror("Invalid input", "Ports must be integers.")
+        scan_type = self.scan_type_var.get()
+        single_port = self.port_mode_var.get() == "single"
+        if scan_type == "idle":
+            messagebox.showerror("Unavailable scan", "Idle scan is not supported.")
             return None
 
-        if not (0 < start_port <= 65535 and 0 < end_port <= 65535):
-            messagebox.showerror("Invalid input", "Ports must be between 1 and 65535.")
-            return None
+        if scan_type in ("ping", "ip_protocol"):
+            start_port = end_port = None
+        else:
+            try:
+                start_port = int(self.start_port_var.get())
+                end_port = start_port if single_port else int(self.end_port_var.get())
+            except ValueError:
+                messagebox.showerror("Invalid input", "Ports must be integers.")
+                return None
 
-        if start_port > end_port:
-            messagebox.showerror("Invalid input", "Start port must be <= end port.")
-            return None
+            if not (0 < start_port <= 65535 and 0 < end_port <= 65535):
+                messagebox.showerror("Invalid input", "Ports must be between 1 and 65535.")
+                return None
 
-        try:
-            num_threads = int(self.thread_var.get())
-            if num_threads < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Invalid input", "Threads must be a positive integer.")
-            return None
+            if start_port > end_port:
+                messagebox.showerror("Invalid input", "Start port must be <= end port.")
+                return None
 
-        try:
-            timeout = float(self.timeout_var.get())
-            if timeout <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Invalid input", "Timeout must be a positive number.")
-            return None
+        num_threads = 1
+        timeout = 0.5
+        if scan_type == "tcp_connect":
+            try:
+                num_threads = int(self.thread_var.get())
+                if num_threads < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid input", "Threads must be a positive integer.")
+                return None
+
+            try:
+                timeout = float(self.timeout_var.get())
+                if timeout <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("Invalid input", "Timeout must be a positive number.")
+                return None
 
         try:
             resolved_ip = socket.gethostbyname(host)
@@ -319,6 +406,7 @@ class PortScannerApp:
             "start_port": start_port,
             "end_port": end_port,
             "single_port": single_port,
+            "scan_type": scan_type,
             "num_threads": num_threads,
             "timeout": timeout,
         }
@@ -332,21 +420,32 @@ class PortScannerApp:
             return
 
         self.clear_results()
-        self.total_ports = params["end_port"] - params["start_port"] + 1
+        self.total_ports = (
+            1 if params["scan_type"] == "ping"
+            else 256 if params["scan_type"] == "ip_protocol"
+            else params["end_port"] - params["start_port"] + 1
+        )
         self.scanned_ports = 0
         self.open_count = 0
+        self.current_scan_type = params["scan_type"]
+        self.scan_note = ""
+        self.scan_error = ""
         self.progress.configure(maximum=self.total_ports, value=0)
 
         self.stop_flag.clear()
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
-        port_description = (
-            f"port {params['start_port']}"
-            if params["single_port"]
-            else f"ports {params['start_port']}-{params['end_port']}"
-        )
+        if params["scan_type"] == "ping":
+            port_description = "host discovery"
+        elif params["scan_type"] == "ip_protocol":
+            port_description = "IP protocols"
+        elif params["single_port"]:
+            port_description = f"port {params['start_port']}"
+        else:
+            port_description = f"ports {params['start_port']}-{params['end_port']}"
         self.status_var.set(
-            f"Scanning {params['host']} ({params['resolved_ip']}) — "
+            f"Running {params['scan_type'].replace('_', ' ')} on "
+            f"{params['host']} ({params['resolved_ip']}) — "
             f"{port_description}..."
         )
 
@@ -370,6 +469,10 @@ class PortScannerApp:
     # ------------------------------------------------------------ Scanning
 
     def _run_scan(self, params):
+        if params["scan_type"] != "tcp_connect":
+            self._run_nmap_scan(params)
+            return
+
         host = params["resolved_ip"]
         ports = list(range(params["start_port"], params["end_port"] + 1))
         port_queue = queue.Queue()
@@ -386,7 +489,9 @@ class PortScannerApp:
                     return
                 is_open = self._check_port(host, port, params["timeout"])
                 service = COMMON_PORTS.get(port, "")
-                self.result_queue.put(("result", port, is_open, service))
+                self.result_queue.put((
+                    "result", port, "open" if is_open else "closed", service, 1
+                ))
                 port_queue.task_done()
 
         num_threads = min(params["num_threads"], len(ports)) or 1
@@ -398,6 +503,118 @@ class PortScannerApp:
 
         elapsed = time.time() - self.scan_start_time
         self.result_queue.put(("done", elapsed, self.stop_flag.is_set()))
+
+    def _run_nmap_scan(self, params):
+        started_at = time.time()
+        process = None
+        try:
+            if not self.nmap_path:
+                raise RuntimeError("Nmap is required for this scan type but was not found.")
+
+            scan_type = params["scan_type"]
+            command = [self.nmap_path, "-n", "-oX", "-"]
+            if scan_type == "ping":
+                command.append("-sn")
+            else:
+                switches = {
+                    "tcp_syn": "-sS",
+                    "ack": "-sA",
+                    "udp": "-sU",
+                    "ip_protocol": "-sO",
+                    "version": "-sV",
+                    "os_detection": "-O",
+                }
+                command.append(switches[scan_type])
+                if scan_type != "ip_protocol":
+                    port_range = str(params["start_port"])
+                    if params["end_port"] != params["start_port"]:
+                        port_range += f"-{params['end_port']}"
+                    command.extend(("-p", port_range))
+                command.append("-Pn")
+            command.extend(("--", params["resolved_ip"]))
+
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.nmap_process = process
+            while True:
+                try:
+                    stdout, stderr = process.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    if not self.stop_flag.is_set():
+                        continue
+                    process.terminate()
+                    try:
+                        stdout, stderr = process.communicate(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        stdout, stderr = process.communicate()
+                    break
+
+            if not self.stop_flag.is_set():
+                if process.returncode:
+                    detail = stderr.strip() or stdout.strip()
+                    raise RuntimeError(detail or f"Nmap exited with status {process.returncode}.")
+                self._queue_nmap_results(stdout, scan_type)
+        except (OSError, ET.ParseError, RuntimeError) as error:
+            self.result_queue.put(("error", str(error)))
+        finally:
+            self.nmap_process = None
+            elapsed = time.time() - started_at
+            self.result_queue.put(("done", elapsed, self.stop_flag.is_set()))
+
+    def _queue_nmap_results(self, output, scan_type):
+        root = ET.fromstring(output)
+        if scan_type == "ping":
+            host = root.find("host")
+            status = host.find("status") if host is not None else None
+            state = status.get("state", "down") if status is not None else "down"
+            self.result_queue.put(("result", "Host", state, "", 1))
+            return
+
+        for host in root.findall("host"):
+            for port in host.findall("./ports/port"):
+                protocol = port.get("protocol", "tcp").upper()
+                port_number = port.get("portid", "?")
+                if protocol == "IP":
+                    port_number = f"IP/{port_number}"
+                state_element = port.find("state")
+                state = state_element.get("state", "unknown") if state_element is not None else "unknown"
+                service_element = port.find("service")
+                service = ""
+                if service_element is not None:
+                    service = " ".join(
+                        part for part in (
+                            service_element.get("name", ""),
+                            service_element.get("product", ""),
+                            service_element.get("version", ""),
+                        ) if part
+                    )
+                self.result_queue.put(("result", port_number, state, service, 1))
+
+            for extra in host.findall("./ports/extraports"):
+                state = extra.get("state", "unknown")
+                try:
+                    count = int(extra.get("count", "0"))
+                except ValueError:
+                    count = 0
+                if count:
+                    self.result_queue.put((
+                        "result", f"Other ports ({count})", state,
+                        f"{count} ports grouped by Nmap", count,
+                    ))
+
+            if scan_type == "os_detection":
+                os_match = host.find("./os/osmatch")
+                if os_match is not None:
+                    name = os_match.get("name", "Unknown OS")
+                    accuracy = os_match.get("accuracy", "")
+                    note = f"OS detection: {name} ({accuracy}% accuracy)" if accuracy else f"OS detection: {name}"
+                    self.result_queue.put(("note", note))
 
     @staticmethod
     def _check_port(host, port, timeout):
@@ -418,34 +635,55 @@ class PortScannerApp:
             while True:
                 item = self.result_queue.get_nowait()
                 if item[0] == "result":
-                    _, port, is_open, service = item
-                    self.scanned_ports += 1
-                    self.progress.configure(value=self.scanned_ports)
+                    _, port, status, service, count = item
+                    state = status.lower()
+                    self.scanned_ports += count
+                    self.progress.configure(
+                        value=min(self.scanned_ports, self.total_ports)
+                    )
 
-                    if is_open:
-                        self.open_count += 1
+                    is_positive = state == "open" or (
+                        self.current_scan_type == "ping" and state == "up"
+                    )
+                    if is_positive:
+                        self.open_count += count
+
+                    show_all = self.current_scan_type in (
+                        "ack", "ip_protocol", "ping"
+                    )
+                    if show_all or is_positive or not self.only_open_var.get():
                         self.tree.insert(
                             "", "end",
-                            values=(port, "OPEN", service or "Unknown"),
-                            tags=("open",),
-                        )
-                    elif not self.only_open_var.get():
-                        self.tree.insert(
-                            "", "end",
-                            values=(port, "closed", service or ""),
-                            tags=("closed",),
+                            values=(port, state.upper(), service),
+                            tags=("open" if is_positive else "closed",),
                         )
 
                 elif item[0] == "done":
                     _, elapsed, was_stopped = item
                     self.start_btn.configure(state="normal")
                     self.stop_btn.configure(state="disabled")
-                    state_text = "Stopped" if was_stopped else "Completed"
-                    self.status_var.set(f"{state_text} in {elapsed:.2f}s")
-                    self.summary_var.set(
-                        f"Scanned {self.scanned_ports}/{self.total_ports} ports — "
-                        f"{self.open_count} open — finished {datetime.now().strftime('%H:%M:%S')}"
+                    state_text = (
+                        "Failed" if self.scan_error
+                        else "Stopped" if was_stopped
+                        else "Completed"
                     )
+                    self.status_var.set(f"{state_text} in {elapsed:.2f}s")
+                    summary = (
+                        f"Scanned {self.scanned_ports}/{self.total_ports} items — "
+                        f"{self.open_count} open/responding — "
+                        f"finished {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                    if self.scan_note:
+                        summary += f" — {self.scan_note}"
+                    if self.scan_error:
+                        summary = f"Scan failed: {self.scan_error}"
+                    self.summary_var.set(
+                        summary
+                    )
+                elif item[0] == "note":
+                    self.scan_note = item[1]
+                elif item[0] == "error":
+                    self.scan_error = item[1]
         except queue.Empty:
             pass
         finally:
