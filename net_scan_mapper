@@ -16,6 +16,7 @@ Notes:
       Unauthorized port scanning may be illegal in your jurisdiction.
 """
 
+import ipaddress
 import socket
 import shutil
 import subprocess
@@ -281,7 +282,7 @@ class PortScannerApp:
         table_frame = ttk.LabelFrame(outer, text="Results", padding=(8, 6))
         table_frame.pack(fill="both", expand=True)
 
-        columns = ("port", "status", "service")
+        columns = ("host", "port", "status", "service")
         self.tree = ttk.Treeview(
             table_frame,
             columns=columns,
@@ -289,9 +290,11 @@ class PortScannerApp:
             selectmode="browse",
             height=16,
         )
+        self.tree.heading("host", text="Host")
         self.tree.heading("port", text="Port")
         self.tree.heading("status", text="Status")
         self.tree.heading("service", text="Likely Service")
+        self.tree.column("host", width=150, minwidth=120, anchor="w", stretch=False)
         self.tree.column("port", width=90, minwidth=80, anchor="center", stretch=False)
         self.tree.column("status", width=120, minwidth=100, anchor="center", stretch=False)
         self.tree.column("service", width=260, minwidth=180, anchor="w", stretch=True)
@@ -395,14 +398,26 @@ class PortScannerApp:
                 return None
 
         try:
-            resolved_ip = socket.gethostbyname(host)
-        except socket.gaierror:
+            try:
+                network = ipaddress.ip_network(host, strict=False)
+            except ValueError:
+                if "/" in host:
+                    raise ValueError
+                network = ipaddress.ip_network(socket.gethostbyname(host))
+            if network.version != 4:
+                raise ValueError
+        except (socket.gaierror, ValueError):
             messagebox.showerror("Invalid input", f"Could not resolve host: {host}")
             return None
 
         return {
             "host": host,
-            "resolved_ip": resolved_ip,
+            "network": network,
+            "target_count": (
+                network.num_addresses
+                if network.prefixlen >= 31
+                else network.num_addresses - 2
+            ),
             "start_port": start_port,
             "end_port": end_port,
             "single_port": single_port,
@@ -420,11 +435,12 @@ class PortScannerApp:
             return
 
         self.clear_results()
-        self.total_ports = (
+        items_per_host = (
             1 if params["scan_type"] == "ping"
             else 256 if params["scan_type"] == "ip_protocol"
             else params["end_port"] - params["start_port"] + 1
         )
+        self.total_ports = params["target_count"] * items_per_host
         self.scanned_ports = 0
         self.open_count = 0
         self.current_scan_type = params["scan_type"]
@@ -445,7 +461,7 @@ class PortScannerApp:
             port_description = f"ports {params['start_port']}-{params['end_port']}"
         self.status_var.set(
             f"Running {params['scan_type'].replace('_', ' ')} on "
-            f"{params['host']} ({params['resolved_ip']}) — "
+            f"{params['host']} — "
             f"{port_description}..."
         )
 
@@ -473,28 +489,28 @@ class PortScannerApp:
             self._run_nmap_scan(params)
             return
 
-        host = params["resolved_ip"]
         ports = list(range(params["start_port"], params["end_port"] + 1))
-        port_queue = queue.Queue()
-        for p in ports:
-            port_queue.put(p)
-
         lock = threading.Lock()
+        work_items = iter(
+            (str(host), port)
+            for host in params["network"].hosts()
+            for port in ports
+        )
 
         def worker():
             while not self.stop_flag.is_set():
-                try:
-                    port = port_queue.get_nowait()
-                except queue.Empty:
-                    return
+                with lock:
+                    try:
+                        host, port = next(work_items)
+                    except StopIteration:
+                        return
                 is_open = self._check_port(host, port, params["timeout"])
                 service = COMMON_PORTS.get(port, "")
                 self.result_queue.put((
-                    "result", port, "open" if is_open else "closed", service, 1
+                    "result", host, port, "open" if is_open else "closed", service, 1
                 ))
-                port_queue.task_done()
 
-        num_threads = min(params["num_threads"], len(ports)) or 1
+        num_threads = min(params["num_threads"], self.total_ports) or 1
         threads = [threading.Thread(target=worker, daemon=True) for _ in range(num_threads)]
         for t in threads:
             t.start()
@@ -531,7 +547,7 @@ class PortScannerApp:
                         port_range += f"-{params['end_port']}"
                     command.extend(("-p", port_range))
                 command.append("-Pn")
-            command.extend(("--", params["resolved_ip"]))
+            command.extend(("--", str(params["network"])))
 
             process = subprocess.Popen(
                 command,
@@ -570,13 +586,17 @@ class PortScannerApp:
     def _queue_nmap_results(self, output, scan_type):
         root = ET.fromstring(output)
         if scan_type == "ping":
-            host = root.find("host")
-            status = host.find("status") if host is not None else None
-            state = status.get("state", "down") if status is not None else "down"
-            self.result_queue.put(("result", "Host", state, "", 1))
+            for host in root.findall("host"):
+                address = host.find("./address[@addrtype='ipv4']")
+                host_ip = address.get("addr", "") if address is not None else ""
+                status = host.find("status")
+                state = status.get("state", "down") if status is not None else "down"
+                self.result_queue.put(("result", host_ip, "Host", state, "", 1))
             return
 
         for host in root.findall("host"):
+            address = host.find("./address[@addrtype='ipv4']")
+            host_ip = address.get("addr", "") if address is not None else ""
             for port in host.findall("./ports/port"):
                 protocol = port.get("protocol", "tcp").upper()
                 port_number = port.get("portid", "?")
@@ -594,7 +614,7 @@ class PortScannerApp:
                             service_element.get("version", ""),
                         ) if part
                     )
-                self.result_queue.put(("result", port_number, state, service, 1))
+                self.result_queue.put(("result", host_ip, port_number, state, service, 1))
 
             for extra in host.findall("./ports/extraports"):
                 state = extra.get("state", "unknown")
@@ -604,7 +624,7 @@ class PortScannerApp:
                     count = 0
                 if count:
                     self.result_queue.put((
-                        "result", f"Other ports ({count})", state,
+                        "result", host_ip, f"Other ports ({count})", state,
                         f"{count} ports grouped by Nmap", count,
                     ))
 
@@ -635,7 +655,7 @@ class PortScannerApp:
             while True:
                 item = self.result_queue.get_nowait()
                 if item[0] == "result":
-                    _, port, status, service, count = item
+                    _, host, port, status, service, count = item
                     state = status.lower()
                     self.scanned_ports += count
                     self.progress.configure(
@@ -654,7 +674,7 @@ class PortScannerApp:
                     if show_all or is_positive or not self.only_open_var.get():
                         self.tree.insert(
                             "", "end",
-                            values=(port, state.upper(), service),
+                            values=(host, port, state.upper(), service),
                             tags=("open" if is_positive else "closed",),
                         )
 
