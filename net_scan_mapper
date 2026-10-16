@@ -149,7 +149,7 @@ class PortScannerApp:
         for col in range(6):
             input_frame.columnconfigure(col, weight=1)
 
-        ttk.Label(input_frame, text="Target Host / IP:").grid(
+        ttk.Label(input_frame, text="Target Host / IP / Subnet:").grid(
             row=0, column=0, sticky="w", padx=4, pady=4
         )
         self.host_var = tk.StringVar(value="127.0.0.1")
