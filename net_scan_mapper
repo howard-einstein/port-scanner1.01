@@ -74,66 +74,73 @@ class PortScannerApp:
     def _configure_styles(self):
         style = ttk.Style(self.root)
 
-        self.root.configure(bg="#ffffff")
-        style.configure("TFrame", background="#ffffff")
-        style.configure("TLabel", background="#ffffff", foreground="#000000")
-        style.configure("TCheckbutton", background="#ffffff", foreground="#000000")
-        style.configure("TRadiobutton", background="#ffffff", foreground="#000000")
+        background = "#1e1e1e"
+        surface = "#252526"
+        field = "#2d2d30"
+        foreground = "#e6e6e6"
+        muted = "#a0a0a0"
+        accent = "#3794ff"
+
+        self.root.configure(bg=background)
+        style.configure("TFrame", background=background)
+        style.configure("TLabel", background=background, foreground=foreground)
+        style.configure("TCheckbutton", background=background, foreground=foreground)
+        style.configure("TRadiobutton", background=background, foreground=foreground)
         style.configure("TButton",
-                        background="#ffffff",
-                        foreground="#000000",
+                        background=field,
+                        foreground=foreground,
                         borderwidth=0,
                         focusthickness=0,
-                        focuscolor="#ffffff",
+                        focuscolor=accent,
                         relief="flat",
                         padding=4)
         style.map("TButton",
-                  background=[("active", "#ffffff"), ("pressed", "#000000")],
-                  foreground=[("disabled", "#000000"), ("active", "#000000"),
+                  background=[("active", "#414149"), ("pressed", accent)],
+                  foreground=[("disabled", muted), ("active", foreground),
                               ("pressed", "#ffffff")])
-        style.map("TCheckbutton", background=[("active", "#ffffff")],
-                  foreground=[("disabled", "#000000"), ("active", "#000000")])
-        style.map("TRadiobutton", background=[("active", "#ffffff")],
-                  foreground=[("disabled", "#000000"), ("active", "#000000")])
+        style.map("TCheckbutton", background=[("active", background)],
+                  foreground=[("disabled", muted), ("active", foreground)])
+        style.map("TRadiobutton", background=[("active", background)],
+                  foreground=[("disabled", muted), ("active", foreground)])
         style.configure("TEntry",
-                        fieldbackground="#ffffff",
-                        foreground="#000000",
-                        background="#ffffff",
+                        fieldbackground=field,
+                        foreground=foreground,
+                        background=field,
                         borderwidth=1,
                         relief="solid")
-        style.configure("TLabelframe", background="#ffffff")
-        style.configure("TLabelframe.Label", background="#ffffff", foreground="#000000")
-        style.configure("TLabelframe.border", background="#000000", relief="solid")
+        style.configure("TLabelframe", background=surface)
+        style.configure("TLabelframe.Label", background=surface, foreground=foreground)
+        style.configure("TLabelframe.border", background="#3f3f46", relief="solid")
         style.configure("Horizontal.TProgressbar",
-                        background="#000000",
-                        troughcolor="#ffffff",
-                        bordercolor="#000000",
-                        lightcolor="#000000",
-                        darkcolor="#000000")
+                        background=accent,
+                        troughcolor=field,
+                        bordercolor=field,
+                        lightcolor=accent,
+                        darkcolor=accent)
         style.configure("TScrollbar",
-                background="#ffffff",
-                troughcolor="#ffffff",
-                bordercolor="#000000",
-                arrowcolor="#000000",
-                lightcolor="#ffffff",
-                darkcolor="#ffffff")
+                        background=field,
+                        troughcolor=background,
+                        bordercolor=background,
+                        arrowcolor=foreground,
+                        lightcolor=field,
+                        darkcolor=field)
 
         style.configure("Treeview",
                         rowheight=28,
                         font=("TkDefaultFont", 10),
-                        fieldbackground="#ffffff",
-                        background="#ffffff",
-                        foreground="#000000")
+                        fieldbackground=background,
+                        background=surface,
+                        foreground=foreground)
         style.configure("Treeview.Heading",
                         font=("TkDefaultFont", 10, "bold"),
-                        background="#ffffff",
-                        foreground="#000000")
+                        background=field,
+                        foreground=foreground)
         style.map("Treeview",
-                  background=[("selected", "#000000")],
+                  background=[("selected", "#094771")],
                   foreground=[("selected", "#ffffff")])
         style.map("Treeview.Heading",
-                  background=[("active", "#ffffff")],
-                  foreground=[("active", "#000000")])
+                  background=[("active", "#414149")],
+                  foreground=[("active", foreground)])
 
     def _build_layout(self):
         outer = ttk.Frame(self.root, padding=12)
@@ -302,8 +309,8 @@ class PortScannerApp:
         self.tree.pack(side="left", fill="both", expand=True, padx=(0, 4))
         vsb.pack(side="right", fill="y")
 
-        self.tree.tag_configure("open", foreground="#000000", font=("TkDefaultFont", 10, "bold"))
-        self.tree.tag_configure("closed", foreground="#000000")
+        self.tree.tag_configure("open", foreground="#7ee787", font=("TkDefaultFont", 10, "bold"))
+        self.tree.tag_configure("closed", foreground="#a0a0a0")
 
         # ---- Log / summary -------------------------------------------------
         self.summary_var = tk.StringVar(value="")
@@ -708,7 +715,7 @@ class PortScannerApp:
 
 
 def main():
-    root = ThemedTk(theme="clam")
+    root = ThemedTk(theme="equilux")
     app = PortScannerApp(root)
     root.mainloop()
 
