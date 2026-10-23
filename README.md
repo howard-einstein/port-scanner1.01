@@ -86,9 +86,9 @@ Python; SYN, ACK, UDP, IP protocol, host discovery (ping), service version, and
 OS detection scans use Nmap. Idle scan is shown as unavailable.
 
 The defaults are `127.0.0.1`, ports `1-1024`, 100 threads, and a 0.5-second
-timeout for TCP connect scans. Results show open ports by default; use “Show
-only open ports” to change that where supported. Scan results are displayed in
-the window and are not saved automatically. Some Nmap modes may require
+timeout for TCP connect scans. Results include all port statuses by default;
+use “Show only open ports” to filter results where supported. Scan results are
+displayed in the window and are not saved automatically. Some Nmap modes may require
 additional privileges depending on the operating system and scan type.
 
 Only scan systems and networks for which you have permission. Scanning can

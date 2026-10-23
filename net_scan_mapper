@@ -205,7 +205,7 @@ class PortScannerApp:
             row=2, column=1, sticky="w", padx=4, pady=4
         )
 
-        self.only_open_var = tk.BooleanVar(value=True)
+        self.only_open_var = tk.BooleanVar(value=False)
         self.only_open_check = ttk.Checkbutton(
             input_frame, text="Show only open ports", variable=self.only_open_var
         )
