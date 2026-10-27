@@ -74,11 +74,11 @@ class PortScannerApp:
     def _configure_styles(self):
         style = ttk.Style(self.root)
 
-        background = "#1e1e1e"
-        surface = "#252526"
-        field = "#2d2d30"
-        foreground = "#e6e6e6"
-        muted = "#a0a0a0"
+        background = "#4a4a4a"
+        surface = "#4a4a4a"
+        field = "#5a5a5a"
+        foreground = "#f0f0f0"
+        muted = "#d1d1d1"
         accent = "#3794ff"
 
         self.root.configure(bg=background)
@@ -95,7 +95,7 @@ class PortScannerApp:
                         relief="flat",
                         padding=4)
         style.map("TButton",
-                  background=[("active", "#414149"), ("pressed", accent)],
+                  background=[("active", "#666666"), ("pressed", accent)],
                   foreground=[("disabled", muted), ("active", foreground),
                               ("pressed", "#ffffff")])
         style.map("TCheckbutton", background=[("active", background)],
@@ -110,7 +110,7 @@ class PortScannerApp:
                         relief="solid")
         style.configure("TLabelframe", background=surface)
         style.configure("TLabelframe.Label", background=surface, foreground=foreground)
-        style.configure("TLabelframe.border", background="#3f3f46", relief="solid")
+        style.configure("TLabelframe.border", background="#5a5a5a", relief="solid")
         style.configure("Horizontal.TProgressbar",
                         background=accent,
                         troughcolor=field,
